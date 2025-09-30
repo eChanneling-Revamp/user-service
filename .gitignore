@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+*.tsbuildinfo
+npm-debug.log*
+.DS_Store
+.vscode/
+coverage/
+/.idea/
+/.qodo/
+ARCHIVE/
