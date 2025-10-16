@@ -6,6 +6,7 @@ import { DatabaseModule } from './database/database.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { MailModule } from './mail/mail.module';
+import { SwaggerController } from './swagger/swagger.controller';
 
 @Module({
   imports: [
@@ -27,7 +28,7 @@ import { MailModule } from './mail/mail.module';
     AuthModule,
     UsersModule,
   ],
-  controllers: [],
+  controllers: [SwaggerController],
   providers: [],
 })
 export class AppModule {}

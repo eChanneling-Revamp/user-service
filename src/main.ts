@@ -13,8 +13,20 @@ async function bootstrap() {
   // Serve static assets from /public (logos, images)
   app.useStaticAssets(join(__dirname, '..', 'public'));
 
-  // Security Best Practices
-  app.use(helmet());
+  // Security Best Practices with CSP adjustment for Swagger
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          styleSrc: ["'self'", "'unsafe-inline'"], // Allow inline styles for Swagger
+          scriptSrc: ["'self'", "'unsafe-inline'"], // Allow inline scripts for Swagger
+          imgSrc: ["'self'", 'data:', 'https:'], // Allow images from CDN
+          connectSrc: ["'self'"], // Only allow connections to same origin
+        },
+      },
+    }),
+  );
   app.enableCors({
     origin: true, // Configure this based on your frontend URLs
     credentials: true,
@@ -61,9 +73,15 @@ async function bootstrap() {
   // Vercel serverless environments (or other bundlers) can find the CSS/JS
   // files at /api/docs/swagger-ui.css, /api/docs/swagger-ui-bundle.js, etc.
   const swaggerDistPath = swaggerUiDist.getAbsoluteFSPath();
-  app.useStaticAssets(swaggerDistPath, { prefix: '/api/docs' });
+  app.useStaticAssets(swaggerUiDist.getAbsoluteFSPath(), {
+    prefix: '/api/docs-static',
+  });
 
-  SwaggerModule.setup('api/docs', app, document);
+  // Only setup the JSON endpoint (custom controller serves HTML)
+  // This makes /api/docs-json available for our custom Swagger UI
+  app.use('/api/docs-json', (req, res) => {
+    res.json(document);
+  });
 
   const port = process.env.PORT || 3000;
   await app.listen(port);
