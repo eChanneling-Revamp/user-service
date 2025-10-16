@@ -5,6 +5,7 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import { join } from 'path';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import * as swaggerUiDist from 'swagger-ui-dist';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -56,6 +57,12 @@ async function bootstrap() {
     .addTag('Users', 'User management endpoints')
     .build();
   const document = SwaggerModule.createDocument(app, config);
+  // Serve swagger-ui static assets from the swagger-ui-dist package so that
+  // Vercel serverless environments (or other bundlers) can find the CSS/JS
+  // files at /api/docs/swagger-ui.css, /api/docs/swagger-ui-bundle.js, etc.
+  const swaggerDistPath = swaggerUiDist.getAbsoluteFSPath();
+  app.useStaticAssets(swaggerDistPath, { prefix: '/api/docs' });
+
   SwaggerModule.setup('api/docs', app, document);
 
   const port = process.env.PORT || 3000;
