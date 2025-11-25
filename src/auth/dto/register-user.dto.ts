@@ -24,6 +24,17 @@ export class RegisterUserDto {
   @IsNotEmpty()
   last_name: string;
 
+  @ApiProperty({
+    example: '200323123487',
+    description: 'User NIC number. Old format: 9 digits + V/X. New format: 12 digits.',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @Matches(/(^\d{9}[VX]$)|(^\d{12}$)/, {
+    message: 'NIC must be either 9 digits followed by V/X or 12 digits.',
+  })
+  nic: string;
+
   @ApiProperty({ example: 'john.doe@example.com', description: 'User email address' })
   @IsEmail()
   @IsNotEmpty()

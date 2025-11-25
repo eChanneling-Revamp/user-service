@@ -131,6 +131,17 @@ export class AuthService {
       throw new ConflictException('User with this phone number already exists');
     }
 
+    // Check if NIC already exists
+    const { data: existingNic } = await this.supabase
+      .from('users')
+      .select('*')
+      .eq('nic', registerDto.nic)
+      .single();
+
+    if (existingNic) {
+      throw new ConflictException('User with this NIC already exists');
+    }
+
     // Hash password
     const hashedPassword = await bcrypt.hash(registerDto.password, 10);
 
@@ -143,6 +154,7 @@ export class AuthService {
           password: hashedPassword,
           first_name: registerDto.first_name,
           last_name: registerDto.last_name,
+          nic: registerDto.nic,
           phone_number: registerDto.phone_number,
           role: registerDto.role,
           age: registerDto.age,
