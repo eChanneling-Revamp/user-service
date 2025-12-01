@@ -7,6 +7,7 @@ import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { MailModule } from './mail/mail.module';
 import { SwaggerController } from './swagger/swagger.controller';
+import { AppController } from './app.controller';
 
 @Module({
   imports: [
@@ -28,7 +29,7 @@ import { SwaggerController } from './swagger/swagger.controller';
     AuthModule,
     UsersModule,
   ],
-  controllers: [SwaggerController],
+  controllers: [SwaggerController, AppController],
   providers: [],
 })
-export class AppModule {}
+export class AppModule { }
