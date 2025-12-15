@@ -19,8 +19,10 @@ import { RegisterUserDto } from '../dto/register-user.dto';
 import { LoginEmailDto } from '../dto/login-email.dto';
 import { SendOtpDto } from '../dto/send-otp.dto';
 import { VerifyOtpDto } from '../dto/verify-otp.dto';
+import { RefreshTokenDto } from '../dto/refresh-token.dto';
 import { RESTRICTED_ROLES } from '../../common/enums/role.enum';
 import { User } from '../../common/interfaces/user.interface';
+import * as crypto from 'crypto';
 
 @Injectable()
 export class AuthService {
@@ -172,13 +174,15 @@ export class AuthService {
     // Send welcome email
     await this.mailService.sendWelcomeEmail(newUser.email, newUser.first_name);
 
-    // Generate JWT token
-    const token = this.generateToken(newUser);
+    // Generate tokens
+    const tokens = await this.generateTokens(newUser);
+    await this.storeRefreshToken(newUser.id, tokens.refreshToken);
 
     return {
       message: 'User registered successfully',
       user: this.sanitizeUser(newUser),
-      token,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
     };
   }
 
@@ -204,13 +208,15 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
-    // Generate JWT token
-    const token = this.generateToken(user);
+    // Generate tokens
+    const tokens = await this.generateTokens(user);
+    await this.storeRefreshToken(user.id, tokens.refreshToken);
 
     return {
       message: 'Login successful',
       user: this.sanitizeUser(user),
-      token,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
     };
   }
 
@@ -345,13 +351,15 @@ export class AuthService {
     // OTP is valid - delete it
     await this.supabase.from('otps').delete().eq('email', user.email);
 
-    // Generate JWT token
-    const token = this.generateToken(user);
+    // Generate tokens
+    const tokens = await this.generateTokens(user);
+    await this.storeRefreshToken(user.id, tokens.refreshToken);
 
     return {
       message: 'Login successful',
       user: this.sanitizeUser(user),
-      token,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
     };
   }
 
@@ -367,12 +375,15 @@ export class AuthService {
       .single();
 
     if (existingUser) {
-      // User exists, generate token
-      const token = this.generateToken(existingUser);
+      // User exists, generate tokens
+      const tokens = await this.generateTokens(existingUser);
+      await this.storeRefreshToken(existingUser.id, tokens.refreshToken);
+
       return {
         message: 'Login successful',
         user: this.sanitizeUser(existingUser),
-        token,
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
       };
     }
 
@@ -396,12 +407,14 @@ export class AuthService {
       throw new HttpException('Failed to create user', HttpStatus.INTERNAL_SERVER_ERROR);
     }
 
-    const token = this.generateToken(newUser);
+    const tokens = await this.generateTokens(newUser);
+    await this.storeRefreshToken(newUser.id, tokens.refreshToken);
 
     return {
       message: 'User registered and logged in successfully',
       user: this.sanitizeUser(newUser),
-      token,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
     };
   }
 
@@ -417,12 +430,15 @@ export class AuthService {
       .single();
 
     if (existingUser) {
-      // User exists, generate token
-      const token = this.generateToken(existingUser);
+      // User exists, generate tokens
+      const tokens = await this.generateTokens(existingUser);
+      await this.storeRefreshToken(existingUser.id, tokens.refreshToken);
+
       return {
         message: 'Login successful',
         user: this.sanitizeUser(existingUser),
-        token,
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
       };
     }
 
@@ -446,12 +462,14 @@ export class AuthService {
       throw new HttpException('Failed to create user', HttpStatus.INTERNAL_SERVER_ERROR);
     }
 
-    const token = this.generateToken(newUser);
+    const tokens = await this.generateTokens(newUser);
+    await this.storeRefreshToken(newUser.id, tokens.refreshToken);
 
     return {
       message: 'User registered and logged in successfully',
       user: this.sanitizeUser(newUser),
-      token,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
     };
   }
 
@@ -621,17 +639,107 @@ export class AuthService {
     };
   }
 
+
   /**
-   * Generate JWT token
+   * Refresh access token using refresh token
    */
-  private generateToken(user: any): string {
+  async refreshTokens(refreshTokenDto: RefreshTokenDto) {
+    const { refreshToken } = refreshTokenDto;
+
+    // Find refresh token in database
+    const { data: tokenRecord, error } = await this.supabase
+      .from('refresh_tokens')
+      .select('*')
+      .eq('token', refreshToken)
+      .single();
+
+    if (error || !tokenRecord) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    // Check if revoked
+    if (tokenRecord.revoked) {
+      // Security: if a revoked token is used, it might be a theft attempt.
+      // We should revoke all tokens for this user family if we had that tracking.
+      // For now, just throw simple error.
+      throw new UnauthorizedException('Refresh token has been revoked');
+    }
+
+    // Check expiry
+    if (new Date(tokenRecord.expires_at) < new Date()) {
+      throw new UnauthorizedException('Refresh token has expired');
+    }
+
+    // Fetch user details
+    const { data: user, error: userError } = await this.supabase
+      .from('users')
+      .select('*')
+      .eq('id', tokenRecord.user_id)
+      .single();
+
+    if (userError || !user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    // Generate new tokens
+    const tokens = await this.generateTokens(user);
+
+    // Revoke old token and link to new one (rotation)
+    await this.supabase
+      .from('refresh_tokens')
+      .update({
+        revoked: true,
+        replaced_by_token: tokens.refreshToken
+      })
+      .eq('id', tokenRecord.id);
+
+    // Store new refresh token
+    await this.storeRefreshToken(user.id, tokens.refreshToken);
+
+    return {
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      user: this.sanitizeUser(user),
+    };
+  }
+
+  /**
+   * Generate Access and Refresh tokens
+   */
+  private async generateTokens(user: any): Promise<{ accessToken: string; refreshToken: string }> {
     const payload = {
       sub: user.id,
       email: user.email,
       role: user.role,
     };
 
-    return this.jwtService.sign(payload);
+    const accessToken = this.jwtService.sign(payload);
+
+    // Refresh token is a random string
+    const refreshToken = crypto.randomBytes(32).toString('hex');
+
+    return { accessToken, refreshToken };
+  }
+
+  /**
+   * Store refresh token in database
+   */
+  private async storeRefreshToken(userId: string, token: string) {
+    // Expiry from config or default 7 days
+    const expiryDays = this.configService.get<number>('REFRESH_TOKEN_EXPIRATION_DAYS') || 7;
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + expiryDays);
+
+    // Limit active sessions per user (optional, simple cleanup)
+    // Delete expired tokens first
+    await this.supabase
+      .rpc('delete_expired_otps'); // We might want a similar function for refresh tokens, or just rely on manual cleanup
+
+    await this.supabase.from('refresh_tokens').insert({
+      user_id: userId,
+      token: token,
+      expires_at: expiresAt.toISOString(),
+    });
   }
 
   /**
@@ -658,3 +766,4 @@ export class AuthService {
     return sanitized;
   }
 }
+

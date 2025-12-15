@@ -8,6 +8,7 @@ import { SendOtpDto } from '../dto/send-otp.dto';
 import { VerifyOtpDto } from '../dto/verify-otp.dto';
 import { RequestPasswordResetDto } from '../dto/request-password-reset.dto';
 import { ResetPasswordDto } from '../dto/reset-password.dto';
+import { RefreshTokenDto } from '../dto/refresh-token.dto';
 import { Public } from '../../common/decorators/public.decorator';
 import { GoogleAuthGuard } from '../guards/google-auth.guard';
 import { AzureAuthGuard } from '../guards/azure-auth.guard';
@@ -16,7 +17,7 @@ import { Request, Response } from 'express';
 @ApiTags('Authentication')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(private readonly authService: AuthService) { }
 
   @Public()
   @Post('register')
@@ -60,6 +61,16 @@ export class AuthController {
   }
 
   @Public()
+  @Post('refresh')
+  @Throttle({ default: { limit: 5, ttl: 60000 } }) // 5 requests per minute
+  @ApiOperation({ summary: 'Refresh access token' })
+  @ApiResponse({ status: 200, description: 'Tokens refreshed successfully' })
+  @ApiResponse({ status: 401, description: 'Invalid or expired refresh token' })
+  async refreshTokens(@Body() refreshTokenDto: RefreshTokenDto) {
+    return this.authService.refreshTokens(refreshTokenDto);
+  }
+
+  @Public()
   @Post('forgot-password')
   @Throttle({ default: { limit: 3, ttl: 60000 } }) // 3 requests per minute
   @ApiOperation({ summary: 'Request password reset - sends OTP to email' })
@@ -94,10 +105,10 @@ export class AuthController {
   @ApiOperation({ summary: 'Google OAuth callback' })
   async googleAuthCallback(@Req() req: Request, @Res() res: Response) {
     const result = await this.authService.handleGoogleLogin(req.user);
-    
+
     // Redirect to frontend with token
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3001';
-    res.redirect(`${frontendUrl}/auth/callback?token=${result.token}`);
+    res.redirect(`${frontendUrl}/auth/callback?token=${result.accessToken}&refreshToken=${result.refreshToken}`);
   }
 
   @Public()
@@ -141,9 +152,9 @@ export class AuthController {
   @ApiOperation({ summary: 'Azure AD OAuth callback' })
   async azureAuthCallback(@Req() req: Request, @Res() res: Response) {
     const result = await this.authService.handleAzureLogin(req.user);
-    
+
     // Redirect to frontend with token
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3001';
-    res.redirect(`${frontendUrl}/auth/callback?token=${result.token}`);
+    res.redirect(`${frontendUrl}/auth/callback?token=${result.accessToken}&refreshToken=${result.refreshToken}`);
   }
 }

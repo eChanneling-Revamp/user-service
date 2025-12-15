@@ -31,6 +31,19 @@ CREATE TABLE IF NOT EXISTS otps (
 );
 
 -- ============================================
+-- 2.1 CREATE REFRESH TOKENS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  revoked BOOLEAN DEFAULT FALSE,
+  replaced_by_token TEXT
+);
+
+-- ============================================
 -- 3. CREATE INDEXES FOR PERFORMANCE
 -- ============================================
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
@@ -38,6 +51,8 @@ CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone_number);
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
 CREATE INDEX IF NOT EXISTS idx_otps_email ON otps(email);
 CREATE INDEX IF NOT EXISTS idx_otps_expires_at ON otps(expires_at);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token ON refresh_tokens(token);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id);
 
 -- ============================================
 -- 4. CREATE FUNCTION TO UPDATE TIMESTAMP
@@ -91,6 +106,12 @@ CREATE POLICY "Service role full access otps" ON otps
   FOR ALL
   USING (true);
 
+-- Policy: Service role can do everything on refresh_tokens
+DROP POLICY IF EXISTS "Service role full access refresh_tokens" ON refresh_tokens;
+CREATE POLICY "Service role full access refresh_tokens" ON refresh_tokens
+  FOR ALL
+  USING (true);
+
 -- ============================================
 -- 9. INSERT INITIAL SUPER ADMIN (OPTIONAL)
 -- ============================================
@@ -113,8 +134,10 @@ VALUES (
 -- Grant necessary permissions to the service role
 GRANT ALL ON users TO service_role;
 GRANT ALL ON otps TO service_role;
+GRANT ALL ON refresh_tokens TO service_role;
 GRANT USAGE ON SEQUENCE users_id_seq TO service_role;
 GRANT USAGE ON SEQUENCE otps_id_seq TO service_role;
+GRANT USAGE ON SEQUENCE refresh_tokens_id_seq TO service_role;
 
 -- ============================================
 -- 11. CREATE VIEW FOR USER STATISTICS (OPTIONAL)
@@ -143,7 +166,7 @@ GRANT SELECT ON user_statistics TO service_role;
 -- Check if tables exist
 SELECT table_name FROM information_schema.tables 
 WHERE table_schema = 'public' 
-AND table_name IN ('users', 'otps');
+AND table_name IN ('users', 'otps', 'refresh_tokens');
 
 -- Check indexes
 SELECT indexname FROM pg_indexes 
