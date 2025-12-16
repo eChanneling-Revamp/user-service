@@ -1,5 +1,5 @@
 import { Controller, Post, Body, Get, UseGuards, Req, Res } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from '../services/auth.service';
 import { RegisterUserDto } from '../dto/register-user.dto';
@@ -8,10 +8,14 @@ import { SendOtpDto } from '../dto/send-otp.dto';
 import { VerifyOtpDto } from '../dto/verify-otp.dto';
 import { RequestPasswordResetDto } from '../dto/request-password-reset.dto';
 import { ResetPasswordDto } from '../dto/reset-password.dto';
+import { RefreshTokenDto } from '../dto/refresh-token.dto';
 import { Public } from '../../common/decorators/public.decorator';
 import { GoogleAuthGuard } from '../guards/google-auth.guard';
 import { AzureAuthGuard } from '../guards/azure-auth.guard';
-import { Request, Response } from 'express';
+import { Request, Response as ExpressResponse } from 'express';
+import { CsrfGuard } from '../guards/csrf.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
+import { Role } from '../../common/enums/role.enum';
 
 @ApiTags('Authentication')
 @Controller('auth')
@@ -24,8 +28,94 @@ export class AuthController {
   @ApiResponse({ status: 201, description: 'User registered successfully' })
   @ApiResponse({ status: 400, description: 'Bad request - validation failed' })
   @ApiResponse({ status: 409, description: 'User already exists' })
-  async register(@Body() registerDto: RegisterUserDto) {
-    return this.authService.register(registerDto);
+  async register(@Body() registerDto: RegisterUserDto, @Res({ passthrough: true }) res: ExpressResponse) {
+    const result = await this.authService.register(registerDto);
+    // Set refresh token in secure httpOnly cookie if present
+    if (result.tokens?.refreshToken) {
+      res.cookie('refresh_token', result.tokens.refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        path: '/',
+        maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days (match refresh expiry)
+      });
+        // Set a non-httpOnly CSRF cookie for double-submit protection
+        const csrf = require('crypto').randomBytes(16).toString('hex');
+        res.cookie('csrf_token', csrf, {
+          httpOnly: false,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'strict',
+          path: '/',
+          maxAge: 1000 * 60 * 60 * 24 * 7,
+        });
+    }
+
+    // Return access token and user but do not expose refresh token in the body
+    return {
+      message: result.message,
+      user: result.user,
+      accessToken: result.tokens?.accessToken,
+    };
+  }
+
+  @Public()
+  @Post('refresh')
+  @Throttle({ default: { limit: 10, ttl: 60000 } }) // 10 requests per minute
+  @ApiOperation({ summary: 'Refresh access token using refresh token' })
+  @ApiBody({ description: 'Refresh token body - accepts `refreshToken` or `refresh_token`', type: RefreshTokenDto, examples: { camelCase: { summary: 'camelCase', value: { refreshToken: 'eyJ...' } }, snake_case: { summary: 'snake_case', value: { refresh_token: 'eyJ...' } } } })
+  @ApiResponse({ status: 200, description: 'Token refreshed' })
+  @ApiResponse({ status: 401, description: 'Invalid or expired refresh token' })
+  @UseGuards(CsrfGuard)
+  async refresh(@Body() refreshDto: RefreshTokenDto, @Req() req: Request, @Res({ passthrough: true }) res: ExpressResponse) {
+    // Prefer cookie if refreshToken not provided in body
+    if (!refreshDto.refreshToken) {
+      refreshDto.refreshToken = (req as any).cookies?.refresh_token;
+    }
+
+    const result = await this.authService.refresh(refreshDto);
+
+    if (result.tokens?.refreshToken) {
+      res.cookie('refresh_token', result.tokens.refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        path: '/',
+        maxAge: 1000 * 60 * 60 * 24 * 7,
+      });
+        // rotate csrf token
+        const csrf = require('crypto').randomBytes(16).toString('hex');
+        res.cookie('csrf_token', csrf, {
+          httpOnly: false,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'strict',
+          path: '/',
+          maxAge: 1000 * 60 * 60 * 24 * 7,
+        });
+    }
+
+    return { message: result.message, accessToken: result.tokens?.accessToken };
+  }
+
+  @Public()
+  @Post('logout')
+  @UseGuards(CsrfGuard)
+  @Throttle({ default: { limit: 10, ttl: 60000 } }) // 10 requests per minute
+  @ApiOperation({ summary: 'Logout and revoke refresh token' })
+  @ApiBody({ description: 'Refresh token body - accepts `refreshToken` or `refresh_token`', type: RefreshTokenDto, examples: { camelCase: { summary: 'camelCase', value: { refreshToken: 'eyJ...' } }, snake_case: { summary: 'snake_case', value: { refresh_token: 'eyJ...' } } } })
+  @ApiResponse({ status: 200, description: 'Logged out' })
+  async logout(@Body() refreshDto: RefreshTokenDto, @Req() req: Request, @Res({ passthrough: true }) res: ExpressResponse) {
+    // Accept cookie if body not provided
+    if (!refreshDto.refreshToken) {
+      refreshDto.refreshToken = (req as any).cookies?.refresh_token;
+    }
+
+    const result = await this.authService.logout(refreshDto);
+
+    // Clear cookie
+    res.clearCookie('refresh_token', { path: '/' });
+      res.clearCookie('csrf_token', { path: '/' });
+
+    return result;
   }
 
   @Public()
@@ -34,8 +124,33 @@ export class AuthController {
   @ApiOperation({ summary: 'Login with email and password (Web)' })
   @ApiResponse({ status: 200, description: 'Login successful' })
   @ApiResponse({ status: 401, description: 'Invalid credentials' })
-  async loginEmail(@Body() loginDto: LoginEmailDto) {
-    return this.authService.loginWithEmail(loginDto);
+  async loginEmail(@Body() loginDto: LoginEmailDto, @Res({ passthrough: true }) res: ExpressResponse) {
+    const result = await this.authService.loginWithEmail(loginDto);
+
+    if (result.tokens?.refreshToken) {
+      res.cookie('refresh_token', result.tokens.refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        path: '/',
+        maxAge: 1000 * 60 * 60 * 24 * 7,
+      });
+      // Set csrf token cookie
+      const csrf = require('crypto').randomBytes(16).toString('hex');
+      res.cookie('csrf_token', csrf, {
+        httpOnly: false,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        path: '/',
+        maxAge: 1000 * 60 * 60 * 24 * 7,
+      });
+    }
+
+    return {
+      message: result.message,
+      user: result.user,
+      accessToken: result.tokens?.accessToken,
+    };
   }
 
   @Public()
@@ -55,8 +170,33 @@ export class AuthController {
   @ApiOperation({ summary: 'Verify OTP and login (Mobile)' })
   @ApiResponse({ status: 200, description: 'Login successful' })
   @ApiResponse({ status: 401, description: 'Invalid or expired OTP' })
-  async verifyOtp(@Body() verifyOtpDto: VerifyOtpDto) {
-    return this.authService.verifyOtp(verifyOtpDto);
+  async verifyOtp(@Body() verifyOtpDto: VerifyOtpDto, @Res({ passthrough: true }) res: ExpressResponse) {
+    const result = await this.authService.verifyOtp(verifyOtpDto);
+
+    if (result.tokens?.refreshToken) {
+      res.cookie('refresh_token', result.tokens.refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        path: '/',
+        maxAge: 1000 * 60 * 60 * 24 * 7,
+      });
+      // Set csrf token cookie
+      const csrf = require('crypto').randomBytes(16).toString('hex');
+      res.cookie('csrf_token', csrf, {
+        httpOnly: false,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        path: '/',
+        maxAge: 1000 * 60 * 60 * 24 * 7,
+      });
+    }
+
+    return {
+      message: result.message,
+      user: result.user,
+      accessToken: result.tokens?.accessToken,
+    };
   }
 
   @Public()
@@ -92,12 +232,23 @@ export class AuthController {
   @Get('google/callback')
   @UseGuards(GoogleAuthGuard)
   @ApiOperation({ summary: 'Google OAuth callback' })
-  async googleAuthCallback(@Req() req: Request, @Res() res: Response) {
+  async googleAuthCallback(@Req() req: Request, @Res() res: ExpressResponse) {
     const result = await this.authService.handleGoogleLogin(req.user);
-    
-    // Redirect to frontend with token
+
+    // Set refresh token cookie if present
+    if (result.tokens?.refreshToken) {
+      res.cookie('refresh_token', result.tokens.refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        path: '/',
+        maxAge: 1000 * 60 * 60 * 24 * 7,
+      });
+    }
+
+    // Redirect to frontend with access token only
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3001';
-    res.redirect(`${frontendUrl}/auth/callback?token=${result.token}`);
+    res.redirect(`${frontendUrl}/auth/callback?token=${result.tokens?.accessToken || ''}`);
   }
 
   @Public()
@@ -111,7 +262,7 @@ export class AuthController {
   @Public()
   @Get('azure')
   @ApiOperation({ summary: 'Initiate Azure AD OAuth login' })
-  async azureAuth(@Res() res: Response) {
+  async azureAuth(@Res() res: ExpressResponse) {
     const authService = this.authService as any;
     const authUrl = authService.getAzureAuthUrl();
 
@@ -139,11 +290,21 @@ export class AuthController {
   @Get('azure/callback')
   @UseGuards(AzureAuthGuard)
   @ApiOperation({ summary: 'Azure AD OAuth callback' })
-  async azureAuthCallback(@Req() req: Request, @Res() res: Response) {
+  async azureAuthCallback(@Req() req: Request, @Res() res: ExpressResponse) {
     const result = await this.authService.handleAzureLogin(req.user);
-    
-    // Redirect to frontend with token
+    // Set refresh token cookie if present
+    if (result.tokens?.refreshToken) {
+      res.cookie('refresh_token', result.tokens.refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        path: '/',
+        maxAge: 1000 * 60 * 60 * 24 * 7,
+      });
+    }
+
+    // Redirect to frontend with access token only
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3001';
-    res.redirect(`${frontendUrl}/auth/callback?token=${result.token}`);
+    res.redirect(`${frontendUrl}/auth/callback?token=${result.tokens?.accessToken || ''}`);
   }
 }

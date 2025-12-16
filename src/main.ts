@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import { join } from 'path';
@@ -9,6 +10,66 @@ import * as swaggerUiDist from 'swagger-ui-dist';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const configService = app.get(ConfigService);
+
+  // JWT refresh secret checks
+  try {
+    const jwtSecret = configService.get<string>('jwt.secret');
+    const refreshSecret = configService.get<string>('jwt.refreshSecret');
+
+    // JWT_SECRET presence & strength checks
+    if (!jwtSecret) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('JWT_SECRET must be set in production and must be a strong secret');
+      } else {
+        console.warn('Warning: JWT_SECRET not set - using default placeholder (not recommended)');
+      }
+    } else {
+      if ((jwtSecret || '').length < 32) {
+        if (process.env.NODE_ENV === 'production') {
+          throw new Error('JWT_SECRET should be at least 32 characters long');
+        } else {
+          console.warn('Warning: JWT_SECRET is shorter than 32 characters - consider increasing its length');
+        }
+      }
+
+      if (jwtSecret.includes('change') || jwtSecret.includes('your-super')) {
+        if (process.env.NODE_ENV === 'production') {
+          throw new Error('JWT_SECRET appears to be a placeholder value. Set a securely generated secret in production');
+        } else {
+          console.warn('Warning: JWT_SECRET looks like the default placeholder - consider replacing it with a strong secret');
+        }
+      }
+    }
+
+    if (!refreshSecret) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('JWT_REFRESH_SECRET must be set in production and should be different from JWT_SECRET');
+      } else {
+        console.warn('Warning: JWT_REFRESH_SECRET not set - using JWT_SECRET as fallback (not recommended for production)');
+      }
+    } else {
+      if (refreshSecret === jwtSecret) {
+        if (process.env.NODE_ENV === 'production') {
+          throw new Error('JWT_REFRESH_SECRET must be different from JWT_SECRET');
+        } else {
+          console.warn('Warning: JWT_REFRESH_SECRET is the same as JWT_SECRET - consider changing it to a distinct, strong secret');
+        }
+      }
+
+      if ((refreshSecret || '').length < 32) {
+        if (process.env.NODE_ENV === 'production') {
+          throw new Error('JWT_REFRESH_SECRET should be at least 32 characters long');
+        } else {
+          console.warn('Warning: JWT_REFRESH_SECRET is shorter than 32 characters - consider increasing its length');
+        }
+      }
+    }
+  } catch (err) {
+    // Surface startup errors
+    console.error('JWT refresh secret validation error:', err.message || err);
+    throw err;
+  }
 
   // Serve static assets from /public (logos, images)
   app.useStaticAssets(join(__dirname, '..', 'public'));
@@ -27,8 +88,20 @@ async function bootstrap() {
       },
     }),
   );
+  // CORS - in production, require FRONTEND_URLS env var with comma-separated origins
+  const frontendOrigins = process.env.FRONTEND_URLS || process.env.FRONTEND_URL;
+  if (process.env.NODE_ENV === 'production') {
+    if (!frontendOrigins) {
+      throw new Error('FRONTEND_URLS or FRONTEND_URL must be set in production for CORS configuration');
+    }
+  }
+
+  const origin = frontendOrigins
+    ? frontendOrigins.split(',').map((s) => s.trim())
+    : true; // in dev allow all origins
+
   app.enableCors({
-    origin: true, // Configure this based on your frontend URLs
+    origin,
     credentials: true,
   });
 
@@ -82,6 +155,10 @@ async function bootstrap() {
   app.use('/api/docs-json', (req, res) => {
     res.json(document);
   });
+
+  // Enable cookie parsing for refresh token cookie support
+  const cookieParser = require('cookie-parser');
+  app.use(cookieParser());
 
   const port = process.env.PORT || 3000;
   await app.listen(port);

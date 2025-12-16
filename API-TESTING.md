@@ -53,7 +53,7 @@ curl -X POST http://localhost:3000/api/auth/register \
     "age": 30,
     "gender": "male"
   },
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
 }
 ```
 
@@ -90,7 +90,7 @@ curl -X POST http://localhost:3000/api/auth/login \
     "last_name": "Doe",
     "role": "patient"
   },
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
 }
 ```
 
@@ -152,7 +152,7 @@ curl -X POST http://localhost:3000/api/auth/verify-otp \
     "last_name": "Doe",
     "role": "patient"
   },
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
 }
 ```
 
@@ -160,6 +160,74 @@ curl -X POST http://localhost:3000/api/auth/verify-otp \
 - 401: Invalid OTP
 - 401: OTP expired
 - 401: Too many failed attempts
+
+---
+
+### 7. Refresh Access Token
+
+**Endpoint**: `POST /api/auth/refresh`
+
+**cURL** (camelCase):
+```bash
+curl -X POST http://localhost:3000/api/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{
+    "refreshToken": "your-refresh-token-here"
+  }'
+```
+
+**cURL** (snake_case):
+```bash
+curl -X POST http://localhost:3000/api/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{
+    "refresh_token": "your-refresh-token-here"
+  }'
+```
+
+**cURL** (cookie-based):
+```bash
+# Assuming the refresh_token cookie is already set by the client (HttpOnly cookie), call the refresh endpoint without a body:
+curl -X POST http://localhost:3000/api/auth/refresh -b "refresh_token=your-refresh-token-here"
+```
+
+**Expected Response**:
+```json
+{
+  "message": "Token refreshed",
+  "accessToken": "new-access-token"
+}
+```
+
+Note: The refresh endpoint now requires a CSRF header when called using cookies. Include the value of the `csrf_token` cookie in the `X-CSRF-Token` header.
+
+Example using curl when cookie already set:
+```bash
+curl -X POST http://localhost:3000/api/auth/refresh \
+  -H "X-CSRF-Token: <value-of-csrf_cookie>" \
+  -b "refresh_token=your-refresh-token-here; csrf_token=<value-of-csrf_cookie>"
+```
+
+> Note: The new refresh token is set as an HttpOnly cookie (refresh_token) and is not returned in the JSON response.
+
+
+### 8. Logout (Revoke Refresh Token)
+
+**Endpoint**: `POST /api/auth/logout`
+
+**cURL**:
+```bash
+curl -X POST http://localhost:3000/api/auth/logout \
+  -H "Content-Type: application/json" \
+  -d '{
+    "refreshToken": "your-refresh-token-here"
+  }'
+```
+
+**Expected Response**:
+```json
+{ "message": "Logged out" }
+```
 
 ---
 

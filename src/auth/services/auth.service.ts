@@ -21,6 +21,7 @@ import { SendOtpDto } from '../dto/send-otp.dto';
 import { VerifyOtpDto } from '../dto/verify-otp.dto';
 import { RESTRICTED_ROLES } from '../../common/enums/role.enum';
 import { User } from '../../common/interfaces/user.interface';
+import { RefreshTokenDto } from '../dto/refresh-token.dto';
 
 @Injectable()
 export class AuthService {
@@ -172,13 +173,13 @@ export class AuthService {
     // Send welcome email
     await this.mailService.sendWelcomeEmail(newUser.email, newUser.first_name);
 
-    // Generate JWT token
-    const token = this.generateToken(newUser);
+    // Generate access + refresh tokens and store refresh
+    const tokens = await this.createAndStoreTokens(newUser);
 
     return {
       message: 'User registered successfully',
       user: this.sanitizeUser(newUser),
-      token,
+      tokens,
     };
   }
 
@@ -204,13 +205,13 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
-    // Generate JWT token
-    const token = this.generateToken(user);
+    // Generate access + refresh tokens and store refresh
+    const tokens = await this.createAndStoreTokens(user);
 
     return {
       message: 'Login successful',
       user: this.sanitizeUser(user),
-      token,
+      tokens,
     };
   }
 
@@ -345,13 +346,13 @@ export class AuthService {
     // OTP is valid - delete it
     await this.supabase.from('otps').delete().eq('email', user.email);
 
-    // Generate JWT token
-    const token = this.generateToken(user);
+    // Generate access + refresh tokens and store refresh
+    const tokens = await this.createAndStoreTokens(user);
 
     return {
       message: 'Login successful',
       user: this.sanitizeUser(user),
-      token,
+      tokens,
     };
   }
 
@@ -368,11 +369,11 @@ export class AuthService {
 
     if (existingUser) {
       // User exists, generate token
-      const token = this.generateToken(existingUser);
+      const tokens = await this.createAndStoreTokens(existingUser);
       return {
         message: 'Login successful',
         user: this.sanitizeUser(existingUser),
-        token,
+        tokens,
       };
     }
 
@@ -396,12 +397,12 @@ export class AuthService {
       throw new HttpException('Failed to create user', HttpStatus.INTERNAL_SERVER_ERROR);
     }
 
-    const token = this.generateToken(newUser);
+    const tokens = await this.createAndStoreTokens(newUser);
 
     return {
       message: 'User registered and logged in successfully',
       user: this.sanitizeUser(newUser),
-      token,
+      tokens,
     };
   }
 
@@ -418,11 +419,11 @@ export class AuthService {
 
     if (existingUser) {
       // User exists, generate token
-      const token = this.generateToken(existingUser);
+      const tokens = await this.createAndStoreTokens(existingUser);
       return {
         message: 'Login successful',
         user: this.sanitizeUser(existingUser),
-        token,
+        tokens,
       };
     }
 
@@ -446,12 +447,12 @@ export class AuthService {
       throw new HttpException('Failed to create user', HttpStatus.INTERNAL_SERVER_ERROR);
     }
 
-    const token = this.generateToken(newUser);
+    const tokens = await this.createAndStoreTokens(newUser);
 
     return {
       message: 'User registered and logged in successfully',
       user: this.sanitizeUser(newUser),
-      token,
+      tokens,
     };
   }
 
@@ -632,6 +633,182 @@ export class AuthService {
     };
 
     return this.jwtService.sign(payload);
+  }
+
+  /**
+   * Create access + refresh tokens and persist refresh token (hashed)
+   */
+  async createAndStoreTokens(user: any): Promise<{ accessToken: string; refreshToken: string }> {
+    const payload = {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+    };
+
+    const accessToken = this.jwtService.sign(payload);
+
+    const refreshToken = this.jwtService.sign(payload, {
+      secret: this.configService.get<string>('jwt.refreshSecret'),
+      expiresIn: this.configService.get<string>('jwt.refreshExpiresIn'),
+    });
+
+    // Hash refresh token before storing
+    const hashed = await bcrypt.hash(refreshToken, 10);
+
+    // Compute expires_at for refresh token
+    const expiresInStr = this.configService.get<string>('jwt.refreshExpiresIn') || '7d';
+    const expiresAt = this.computeExpiryDate(expiresInStr);
+
+    await this.supabase.from('refresh_tokens').insert([
+      {
+        user_id: user.id,
+        token: hashed,
+        expires_at: expiresAt.toISOString(),
+      },
+    ]);
+
+    return { accessToken, refreshToken };
+  }
+
+  /**
+   * Compute a Date from an expiresIn string like '7d', '24h', '3600s'
+   */
+  private computeExpiryDate(expiresIn: string): Date {
+    const now = new Date();
+
+    const dayMatch = expiresIn.match(/^(\d+)d$/);
+    const hourMatch = expiresIn.match(/^(\d+)h$/);
+    const minMatch = expiresIn.match(/^(\d+)m$/);
+    const secMatch = expiresIn.match(/^(\d+)s$/);
+    const numMatch = expiresIn.match(/^(\d+)$/);
+
+    if (dayMatch) {
+      now.setDate(now.getDate() + parseInt(dayMatch[1], 10));
+      return now;
+    }
+    if (hourMatch) {
+      now.setHours(now.getHours() + parseInt(hourMatch[1], 10));
+      return now;
+    }
+    if (minMatch) {
+      now.setMinutes(now.getMinutes() + parseInt(minMatch[1], 10));
+      return now;
+    }
+    if (secMatch) {
+      now.setSeconds(now.getSeconds() + parseInt(secMatch[1], 10));
+      return now;
+    }
+    if (numMatch) {
+      // assume seconds
+      now.setSeconds(now.getSeconds() + parseInt(numMatch[1], 10));
+      return now;
+    }
+
+    // Fallback: add 7 days
+    now.setDate(now.getDate() + 7);
+    return now;
+  }
+
+  /**
+   * Refresh access token using a valid (non-revoked, unexpired) refresh token
+   */
+  async refresh(refreshDto: RefreshTokenDto) {
+    const { refreshToken } = refreshDto;
+    const secret = this.configService.get<string>('jwt.refreshSecret');
+
+    let payload: any;
+    try {
+      payload = this.jwtService.verify(refreshToken, { secret });
+    } catch (err) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    const userId = payload.sub;
+
+    // Fetch user's refresh tokens (include revoked to detect reuse)
+    const { data: rows } = await this.supabase
+      .from('refresh_tokens')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+
+    if (!rows || rows.length === 0) {
+      throw new UnauthorizedException('Refresh token not found');
+    }
+
+    // Find a matching token (compare hashed values). Also detect reuse if the matching token is revoked.
+    let matched: any = null;
+    for (const row of rows) {
+      const isMatch = await bcrypt.compare(refreshToken, row.token);
+      if (!isMatch) continue;
+
+      // If the token is found but already revoked -> reuse detected
+      if (row.revoked) {
+        this.logger.warn(`Detected refresh token reuse for user ${userId}, revoking all refresh tokens.`);
+        // Revoke all refresh tokens for this user (security measure)
+        await this.supabase.from('refresh_tokens').update({ revoked: true }).eq('user_id', userId);
+        throw new UnauthorizedException('Refresh token reuse detected; all refresh tokens revoked');
+      }
+
+      // Check expiry
+      if (new Date(row.expires_at) < new Date()) continue;
+
+      matched = row;
+      break;
+    }
+
+    if (!matched) {
+      throw new UnauthorizedException('Refresh token invalid or expired');
+    }
+
+    // Load user
+    const { data: user } = await this.supabase.from('users').select('*').eq('id', userId).single();
+    if (!user) throw new UnauthorizedException('User not found');
+
+    // Revoke the old refresh token (rotation)
+    await this.supabase.from('refresh_tokens').update({ revoked: true }).eq('id', matched.id);
+
+    // Issue new tokens
+    const tokens = await this.createAndStoreTokens(user);
+
+    return { message: 'Token refreshed', tokens };
+  }
+
+  /**
+   * Admin: revoke all refresh tokens for a user
+   */
+  async revokeAllRefreshTokensForUser(userId: string) {
+    await this.supabase.from('refresh_tokens').update({ revoked: true }).eq('user_id', userId);
+    return { message: `Revoked all refresh tokens for user ${userId}` };
+  }
+
+  /**
+   * Logout - revoke refresh token
+   */
+  async logout(refreshDto: RefreshTokenDto) {
+    const { refreshToken } = refreshDto;
+    const secret = this.configService.get<string>('jwt.refreshSecret');
+
+    let payload: any;
+    try {
+      payload = this.jwtService.verify(refreshToken, { secret });
+    } catch (err) {
+      // Still try to find and revoke any matching hashed token
+    }
+
+    // Try to find matching hashed token for any user and revoke it
+    const { data: rows } = await this.supabase.from('refresh_tokens').select('*');
+    if (rows && rows.length > 0) {
+      for (const row of rows) {
+        const isMatch = await bcrypt.compare(refreshToken, row.token);
+        if (isMatch) {
+          await this.supabase.from('refresh_tokens').update({ revoked: true }).eq('id', row.id);
+          return { message: 'Logged out' };
+        }
+      }
+    }
+
+    return { message: 'No matching token found' };
   }
 
   /**

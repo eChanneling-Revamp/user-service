@@ -4,6 +4,7 @@ import { PassportModule } from '@nestjs/passport';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { AuthController } from './controllers/auth.controller';
+import { AuthAdminController } from './controllers/admin.controller';
 import { AuthService } from './services/auth.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { GoogleStrategy } from './strategies/google.strategy';
@@ -27,12 +28,13 @@ import { MailModule } from '../mail/mail.module';
     }),
     MailModule,
   ],
-  controllers: [AuthController],
   providers: [
     AuthService,
     JwtStrategy,
     GoogleStrategy,
     AzureAdStrategy,
+    // Refresh cleanup service
+    require('./services/refresh-cleanup.service').RefreshTokenCleanupService,
     // Apply JWT guard globally to all routes
     {
       provide: APP_GUARD,
@@ -44,6 +46,7 @@ import { MailModule } from '../mail/mail.module';
       useClass: RolesGuard,
     },
   ],
+  controllers: [AuthController, AuthAdminController],
   exports: [AuthService],
 })
 export class AuthModule {}
