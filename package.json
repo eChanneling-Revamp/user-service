@@ -29,7 +29,7 @@
     "@nestjs/jwt": "^10.2.0",
     "@nestjs/passport": "^10.0.3",
     "@nestjs/platform-express": "^10.4.8",
-    "@nestjs/swagger": "^11.2.3",
+    "@nestjs/swagger": "^8.0.0",
     "@nestjs/throttler": "^6.2.1",
     "@supabase/supabase-js": "^2.46.2",
     "bcrypt": "^5.1.1",
@@ -42,10 +42,10 @@
     "passport-custom": "^1.1.1",
     "passport-google-oauth20": "^2.0.0",
     "passport-jwt": "^4.0.1",
+    "pg": "^8.11.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "swagger-ui-dist": "^4.15.0",
-    "pg": "^8.11.1"
+    "swagger-ui-dist": "^4.15.0"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.14",
@@ -61,6 +61,7 @@
     "@types/supertest": "^6.0.2",
     "@typescript-eslint/eslint-plugin": "^8.18.2",
     "@typescript-eslint/parser": "^8.18.2",
+    "dotenv": "^16.6.0",
     "eslint": "^9.17.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-prettier": "^5.2.1",
@@ -72,8 +73,7 @@
     "ts-loader": "^9.5.1",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
-    "typescript": "^5.7.2",
-    "dotenv": "^16.6.0"
+    "typescript": "^5.7.2"
   },
   "jest": {
     "moduleFileExtensions": [
