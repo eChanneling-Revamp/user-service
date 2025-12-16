@@ -54,6 +54,7 @@ jobs:
             -e EMAIL_PASS="${{ secrets.EMAIL_PASS }}" \
             -e EMAIL_FROM="${{ secrets.EMAIL_FROM }}" \
             -e JWT_SECRET="${{ secrets.JWT_SECRET }}" \
+            -e JWT_REFRESH_SECRET="${{ secrets.JWT_REFRESH_SECRET }}" \
             -e NODE_ENV="${{ secrets.NODE_ENV }}" \
             -e PORT="${{ secrets.PORT }}" \
             -e SUPABASE_URL="${{ secrets.SUPABASE_URL }}" \
@@ -210,6 +211,7 @@ jobs:
             -e EMAIL_PASS='${{ secrets.EMAIL_PASS }}' \
             -e EMAIL_FROM='${{ secrets.EMAIL_FROM }}' \
             -e JWT_SECRET='${{ secrets.JWT_SECRET }}' \
+            -e JWT_REFRESH_SECRET='${{ secrets.JWT_REFRESH_SECRET }}' \
             -e NODE_ENV='${{ secrets.NODE_ENV }}' \
             -e PORT='${{ secrets.PORT }}' \
             -e SUPABASE_URL='${{ secrets.SUPABASE_URL }}' \
