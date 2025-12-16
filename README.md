@@ -81,6 +81,25 @@ SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
 # JWT Configuration
 JWT_SECRET=your-super-secret-key-change-in-production-minimum-32-characters-long
 JWT_EXPIRATION=24h
+# Refresh token configuration (optional - recommended)
+JWT_REFRESH_SECRET=another-super-secret-key
+JWT_REFRESH_EXPIRATION=7d
+
+**Integration guide:** See `docs/AUTH-INTEGRATION.md` for a step-by-step guide on endpoints, web & mobile integration, CSRF handling, code examples for Next.js and React, and deployment checklist.
+
+**Local token verification utility:**
+
+A small helper script is available to decode and verify JWTs locally using your `.env` values:
+
+```
+# Verify a JWT with env secrets (looks for JWT_SECRET & JWT_REFRESH_TOKEN_SECRET):
+npm run verify:jwt -- --token <JWT> --use-env
+
+# Verify with an explicit secret:
+npm run verify:jwt -- --token <JWT> --secret "your-secret-here"
+```
+
+This utility is intended for local development and debugging only. Do NOT expose token verification endpoints in production.
 
 # Google OAuth
 GOOGLE_CLIENT_ID=your-google-client-id
@@ -130,6 +149,24 @@ CREATE TABLE users (
 CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_users_phone ON users(phone_number);
 CREATE INDEX idx_users_role ON users(role);
+
+### Running DB migrations locally or on your DB
+
+This project includes a simple migration runner that applies SQL files placed in `db/migrations/` (ordered by filename) and records applied migrations in a `migrations` table.
+
+Quick steps:
+
+1. Ensure you have a Postgres connection string available as `DATABASE_URL` in your environment (e.g., `postgres://user:pass@host:5432/dbname`).
+2. Run the migrations with the npm script:
+
+```bash
+DATABASE_URL="postgres://user:pass@host:5432/dbname" npm run migrate
+```
+
+If you don't have direct DB access (e.g., you use Supabase), you can open each `.sql` file in `db/migrations/` and run them in the Supabase SQL Editor.
+
+Note: The migration runner will create and use a `migrations` table to avoid reapplying the same file.
+
 ```
 
 #### 2. OTPs Table
@@ -146,6 +183,21 @@ CREATE TABLE otps (
 
 -- Create index for email lookups
 CREATE INDEX idx_otps_email ON otps(email);
+
+#### 3. Refresh Tokens Table
+
+```sql
+CREATE TABLE refresh_tokens (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  revoked BOOLEAN DEFAULT FALSE
+);
+
+CREATE INDEX idx_refresh_tokens_user_id ON refresh_tokens(user_id);
+```
 
 -- Auto-delete expired OTPs (optional but recommended)
 CREATE OR REPLACE FUNCTION delete_expired_otps()
