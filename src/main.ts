@@ -88,24 +88,44 @@ async function bootstrap() {
       },
     }),
   );
-  // CORS - in production, require FRONTEND_URLS env var with comma-separated origins
+  // CORS - soft-fail in production if FRONTEND_URLS not provided
   const frontendOrigins = process.env.FRONTEND_URLS || process.env.FRONTEND_URL;
-  if (process.env.NODE_ENV === 'production') {
-    if (!frontendOrigins) {
-      throw new Error('FRONTEND_URLS or FRONTEND_URL must be set in production for CORS configuration');
-    }
+  const allowedOrigins = frontendOrigins
+    ? frontendOrigins.split(',').map((s) => s.trim()).filter(Boolean)
+    : [];
+
+  if (process.env.NODE_ENV === 'production' && !frontendOrigins) {
+    console.warn(
+      '⚠️ FRONTEND_URLS not set. Defaulting to same-origin only. Cross-origin requests will be blocked until origins are configured.',
+    );
   }
 
-  const origin = frontendOrigins
-    ? frontendOrigins.split(',').map((s) => s.trim())
-    : true; // in dev allow all origins
+  if (process.env.ALLOW_ALL_ORIGINS === 'true') {
+    app.enableCors({ origin: true, credentials: true });
+  } else {
+    app.enableCors({
+      credentials: true,
+      origin: (origin, callback) => {
+        // Allow non-browser requests (curl, server-to-server, health checks)
+        if (!origin) {
+          return callback(null, true);
+        }
 
-  app.enableCors({
-    origin,
-    credentials: true,
-  });
+        // If no origins configured yet → block cross-origin
+        if (allowedOrigins.length === 0) {
+          return callback(new Error('CORS blocked for origin: ' + origin), false);
+        }
 
-  // Global Validation Pipe
+        if (allowedOrigins.includes(origin)) {
+          return callback(null, true);
+        }
+
+        return callback(new Error('CORS blocked for origin: ' + origin), false);
+      },
+    });
+  }
+
+// Global Validation Pipe
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true, // Strip away properties that do not have any decorators
