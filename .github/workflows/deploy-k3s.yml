@@ -75,8 +75,8 @@ jobs:
             sed -i "s|ghcr.io/<your-github-username>/user-service:latest|ghcr.io/${{ env.IMAGE_NAME }}:latest|g" deployment.yaml
 
             # 2. Create Secrets
-            sudo k3s kubectl delete secret user-service-secrets --ignore-not-found
-            sudo k3s kubectl create secret generic user-service-secrets \
+            kubectl delete secret user-service-secrets --ignore-not-found
+            kubectl create secret generic user-service-secrets \
               --from-literal=DATABASE_URL='${{ secrets.DATABASE_URL }}' \
               --from-literal=GOOGLE_CLIENT_ID='${{ secrets.GOOGLE_CLIENT_ID }}' \
               --from-literal=GOOGLE_CLIENT_SECRET='${{ secrets.GOOGLE_CLIENT_SECRET }}' \
@@ -100,8 +100,8 @@ jobs:
               --from-literal=JWT_EXPIRATION='${{ secrets.JWT_EXPIRATION }}'
 
             # 3. Apply Manifests
-            sudo k3s kubectl apply -f deployment.yaml
-            sudo k3s kubectl apply -f service.yaml
+            kubectl apply -f deployment.yaml
+            kubectl apply -f service.yaml
 
             # 4. Force Restart
-            sudo k3s kubectl rollout restart deployment/user-service
+            kubectl rollout restart deployment/user-service
