@@ -63,7 +63,7 @@ jobs:
             -e OTP_EXPIRY_MINUTES="${{ secrets.OTP_EXPIRY_MINUTES }}" \
             -e OTP_COOLDOWN_SECONDS="${{ secrets.OTP_COOLDOWN_SECONDS }}" \
             -e JWT_EXPIRATION="${{ secrets.JWT_EXPIRATION }}" \
-            -p 3001:3001 \
+            -p 3003:3003 \
             user-service:test
 
       - name: Wait for service to start
@@ -220,7 +220,7 @@ jobs:
             -e OTP_EXPIRY_MINUTES='${{ secrets.OTP_EXPIRY_MINUTES }}' \
             -e OTP_COOLDOWN_SECONDS='${{ secrets.OTP_COOLDOWN_SECONDS }}' \
             -e JWT_EXPIRATION='${{ secrets.JWT_EXPIRATION }}' \
-            -p 3001:3001 \
+            -p 3003:3003 \
             "$IMAGE"
 
           echo "Container status:"
