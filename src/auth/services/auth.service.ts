@@ -8,6 +8,8 @@ import {
   HttpException,
   HttpStatus,
   Optional,
+  NotFoundException,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
@@ -83,13 +85,16 @@ export class AuthService {
 
     if (tenantId && clientId && redirectUri) {
       const scopes = ['user.read', 'openid', 'profile', 'email'].join(' ');
-      this.azureAuthUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize?` +
+      this.azureAuthUrl =
+        `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize?` +
         `client_id=${clientId}` +
         `&response_type=code` +
         `&redirect_uri=${encodeURIComponent(redirectUri)}` +
         `&scope=${encodeURIComponent(scopes)}`;
     } else {
-      this.logger.warn('Azure AD OAuth not fully configured - missing tenantId/clientId/redirectUri');
+      this.logger.warn(
+        'Azure AD OAuth not fully configured - missing tenantId/clientId/redirectUri',
+      );
       this.azureAuthUrl = '';
     }
   }
@@ -330,15 +335,10 @@ export class AuthService {
       if (newAttempts >= 5) {
         // Delete OTP after 5 failed attempts
         await this.supabase.from('otps').delete().eq('email', user.email);
-        throw new UnauthorizedException(
-          'Too many failed attempts. Please request a new OTP.',
-        );
+        throw new UnauthorizedException('Too many failed attempts. Please request a new OTP.');
       }
 
-      await this.supabase
-        .from('otps')
-        .update({ attempts: newAttempts })
-        .eq('email', user.email);
+      await this.supabase.from('otps').update({ attempts: newAttempts }).eq('email', user.email);
 
       throw new UnauthorizedException('Invalid OTP');
     }
@@ -587,9 +587,7 @@ export class AuthService {
       if (newAttempts >= 5) {
         // Delete OTP after 5 failed attempts
         await this.supabase.from('otps').delete().eq('email', resetDto.email);
-        throw new UnauthorizedException(
-          'Too many failed attempts. Please request a new OTP.',
-        );
+        throw new UnauthorizedException('Too many failed attempts. Please request a new OTP.');
       }
 
       await this.supabase
@@ -744,7 +742,9 @@ export class AuthService {
 
       // If the token is found but already revoked -> reuse detected
       if (row.revoked) {
-        this.logger.warn(`Detected refresh token reuse for user ${userId}, revoking all refresh tokens.`);
+        this.logger.warn(
+          `Detected refresh token reuse for user ${userId}, revoking all refresh tokens.`,
+        );
         // Revoke all refresh tokens for this user (security measure)
         await this.supabase.from('refresh_tokens').update({ revoked: true }).eq('user_id', userId);
         throw new UnauthorizedException('Refresh token reuse detected; all refresh tokens revoked');
@@ -780,6 +780,83 @@ export class AuthService {
   async revokeAllRefreshTokensForUser(userId: string) {
     await this.supabase.from('refresh_tokens').update({ revoked: true }).eq('user_id', userId);
     return { message: `Revoked all refresh tokens for user ${userId}` };
+  }
+
+  /**
+   * Delete a user and all associated data
+   * @param userId - The UUID of the user to delete
+   * @returns The deleted user's id and email
+   */
+  async deleteUser(userId: string): Promise<{ id: string; email: string }> {
+    // Validate userId input
+    if (!userId) {
+      throw new BadRequestException('User ID is required');
+    }
+
+    try {
+      // 1. Validate user exists
+      const { data: user, error: userError } = await this.supabase
+        .from('users')
+        .select('*')
+        .eq('id', userId)
+        .single();
+
+      if (userError || !user) {
+        throw new NotFoundException(`User with id ${userId} not found`);
+      }
+
+      const userEmail = user.email;
+
+      // 2. Revoke all refresh tokens for the user
+      await this.revokeAllRefreshTokensForUser(userId);
+
+      // 3. Delete refresh tokens for the user
+      const { error: deleteTokensError } = await this.supabase
+        .from('refresh_tokens')
+        .delete()
+        .eq('user_id', userId);
+
+      if (deleteTokensError) {
+        this.logger.error('Failed to delete refresh tokens', deleteTokensError);
+        throw new InternalServerErrorException('Failed to delete user refresh tokens');
+      }
+
+      // 4. Delete OTPs for the user's email
+      const { error: deleteOtpsError } = await this.supabase
+        .from('otps')
+        .delete()
+        .eq('email', userEmail);
+
+      if (deleteOtpsError) {
+        this.logger.error('Failed to delete OTPs', deleteOtpsError);
+        throw new InternalServerErrorException('Failed to delete user OTPs');
+      }
+
+      // 5. Delete the user
+      const { error: deleteUserError } = await this.supabase
+        .from('users')
+        .delete()
+        .eq('id', userId);
+
+      if (deleteUserError) {
+        this.logger.error('Failed to delete user', deleteUserError);
+        throw new InternalServerErrorException('Failed to delete user');
+      }
+
+      this.logger.log(`User ${userId} deleted successfully`);
+
+      return { id: userId, email: userEmail };
+    } catch (error) {
+      if (
+        error instanceof NotFoundException ||
+        error instanceof InternalServerErrorException ||
+        error instanceof BadRequestException
+      ) {
+        throw error;
+      }
+      this.logger.error('Unexpected error during user deletion', error);
+      throw new InternalServerErrorException('An unexpected error occurred during user deletion');
+    }
   }
 
   /**
